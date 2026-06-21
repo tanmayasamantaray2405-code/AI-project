@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;450;500;600;700;800&family=Outfit:wght@400;600;750;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;600;700;800;900&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -13,6 +13,28 @@
   body {
     @apply transition-colors duration-300;
   }
+}
+
+@layer utilities {
+  .z-45 { z-index: 45; }
+  .text-slate-350 { color: rgb(203 213 225); }
+  .text-slate-405 { color: rgb(148 163 184); }
+  .text-slate-450 { color: rgb(100 116 139); }
+  .text-slate-650 { color: rgb(71 85 105); }
+  .text-emerald-450 { color: rgb(52 211 153); }
+  .text-emerald-650 { color: rgb(5 150 105); }
+  .text-red-450 { color: rgb(248 113 113); }
+  .text-red-650 { color: rgb(220 38 38); }
+  .text-violet-650 { color: rgb(124 58 237); }
+  .hover\:text-slate-650:hover { color: rgb(71 85 105); }
+  .hover\:text-violet-750:hover { color: rgb(91 33 182); }
+  .hover\:bg-violet-750:hover { background-color: rgb(91 33 182); }
+  .bg-violet-350 { background-color: rgb(167 139 250); }
+  .bg-violet-850 { background-color: rgb(76 29 149); }
+  .bg-violet-650 { background-color: rgb(124 58 237); }
+  .to-indigo-650 { --tw-gradient-to: rgb(79 70 229) var(--tw-gradient-to-position); }
+  .active\:scale-98:active { transform: scale(.98); }
+  .focus\:border-violet-505:focus { border-color: rgb(139 92 246); }
 }
 
 /* Custom premium micro-animations */

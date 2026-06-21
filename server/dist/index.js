@@ -24,6 +24,9 @@ app.use(express_1.default.json());
 app.use('/users', userRoutes_1.default);
 app.use('/tasks', taskRoutes_1.default);
 app.use('/recommendations', recommendationRoutes_1.default);
+app.use('/api/users', userRoutes_1.default);
+app.use('/api/tasks', taskRoutes_1.default);
+app.use('/api/recommendations', recommendationRoutes_1.default);
 // Health Check / Root route
 app.get('/', (req, res) => {
     res.json({

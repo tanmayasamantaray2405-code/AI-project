@@ -1,6 +1,7 @@
 import { Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { AuthRequest } from '../types';
+import { getJwtSecret } from '../utils/security';
 
 export const protect = async (req: AuthRequest, res: Response, next: NextFunction): Promise<any> => {
   let token;
@@ -15,7 +16,7 @@ export const protect = async (req: AuthRequest, res: Response, next: NextFunctio
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'prod_ready_secret_key_987654321') as { id: string };
+    const decoded = jwt.verify(token, getJwtSecret()) as { id: string };
     
     // Attach the user ID to the request object
     req.user = { id: decoded.id };

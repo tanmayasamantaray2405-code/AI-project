@@ -144,69 +144,159 @@ const getUserTasks = async (userId) => {
 const getSmartRecommendations = async (userId) => {
     const userTasks = await getUserTasks(userId);
     const completedTasks = userTasks.filter((task) => task.status === 'completed');
-    let topCategory = 'coding';
-    let explanation = 'Welcome! Add some tasks to initialize the smart recommendation engine.';
+    if (completedTasks.length < 2) {
+        return {
+            hasEnoughData: false,
+            topCategory: null,
+            recommendedTasks: [],
+            recommendations: [],
+            explanation: 'AI recommendations will appear after sufficient activity data is collected.',
+        };
+    }
+    // Build sets/maps of user's task history to avoid duplicates
+    const completedTitles = new Set(completedTasks.map((t) => t.title.toLowerCase().trim()));
+    const activeTitles = new Set(userTasks.filter((t) => t.status === 'pending').map((t) => t.title.toLowerCase().trim()));
+    // 1. Calculate Category Preferences
+    const categoryCounts = {};
+    completedTasks.forEach((task) => {
+        categoryCounts[task.category] = (categoryCounts[task.category] || 0) + 1;
+    });
+    const sortedCategories = Object.entries(categoryCounts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([cat]) => cat);
+    const topCategory = sortedCategories[0] || 'coding';
+    // 2. Determine target difficulty per category based on completions
+    const getTargetDifficulty = (cat) => {
+        const catCompletions = completedTasks.filter((t) => t.category === cat);
+        const beginnerCount = catCompletions.filter((t) => t.difficulty === 'beginner' || !t.difficulty).length;
+        const intermediateCount = catCompletions.filter((t) => t.difficulty === 'intermediate').length;
+        if (beginnerCount >= 3 && intermediateCount < 3) {
+            return 'intermediate';
+        }
+        else if (beginnerCount >= 3 && intermediateCount >= 3) {
+            return 'advanced';
+        }
+        return 'beginner';
+    };
+    // 3. Peak productivity category
+    let preferredCategory = 'coding';
     if (completedTasks.length > 0) {
-        // 1. Identify category frequency
-        const categoryCounts = {};
-        completedTasks.forEach((task) => {
-            categoryCounts[task.category] = (categoryCounts[task.category] || 0) + 1;
-        });
-        let maxCount = 0;
-        Object.entries(categoryCounts).forEach(([cat, count]) => {
-            if (count > maxCount) {
-                maxCount = count;
-                topCategory = cat;
+        const categorySpeedSum = {};
+        const categorySpeedCount = {};
+        completedTasks.forEach((t) => {
+            if (t.completedAt && t.createdAt) {
+                const diff = new Date(t.completedAt).getTime() - new Date(t.createdAt).getTime();
+                const diffMinutes = diff / (1000 * 60);
+                categorySpeedSum[t.category] = (categorySpeedSum[t.category] || 0) + diffMinutes;
+                categorySpeedCount[t.category] = (categorySpeedCount[t.category] || 0) + 1;
             }
         });
-        explanation = `Based on your recent completions, you are heavily focusing on "${topCategory}". We generated next-level progressive challenges for you!`;
-    }
-    else if (userTasks.length > 0) {
-        // If no completed tasks, fall back to counts of pending tasks
-        const categoryCounts = {};
-        userTasks.forEach((task) => {
-            categoryCounts[task.category] = (categoryCounts[task.category] || 0) + 1;
-        });
-        let maxCount = 0;
-        Object.entries(categoryCounts).forEach(([cat, count]) => {
-            if (count > maxCount) {
-                maxCount = count;
-                topCategory = cat;
+        let minAvg = Infinity;
+        Object.keys(categorySpeedCount).forEach((cat) => {
+            const avg = categorySpeedSum[cat] / categorySpeedCount[cat];
+            if (avg < minAvg) {
+                minAvg = avg;
+                preferredCategory = cat;
             }
         });
-        explanation = `You have tasks lined up in "${topCategory}". We suggest these progressive recommendations to build consistency.`;
     }
-    // 2. Identify the current difficulty tier for the top category
-    // Heuristic: Promote difficulty based on completions in this category
-    const completionsInTopCategory = completedTasks.filter((task) => task.category === topCategory);
-    // Count by difficulty level
-    const beginnerCount = completionsInTopCategory.filter((t) => t.difficulty === 'beginner' || !t.difficulty).length;
-    const intermediateCount = completionsInTopCategory.filter((t) => t.difficulty === 'intermediate').length;
-    let targetDifficulty = 'beginner';
-    if (beginnerCount >= 3 && intermediateCount < 3) {
-        targetDifficulty = 'intermediate';
-        explanation += ` Since you completed ${beginnerCount} beginner tasks, we promoted your coding difficulty to Intermediate.`;
+    // 4. Recently active categories (completed in past 7 days)
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const recentCategories = new Set(completedTasks
+        .filter((t) => t.completedAt && new Date(t.completedAt) >= oneWeekAgo)
+        .map((t) => t.category));
+    const scoredPool = [];
+    Object.entries(PROGRESSIVE_TASKS).forEach(([cat, diffMap]) => {
+        Object.entries(diffMap).forEach(([diff, taskList]) => {
+            const targetDiff = getTargetDifficulty(cat);
+            taskList.forEach((title) => {
+                const titleClean = title.toLowerCase().trim();
+                // Rule: Avoid duplicate recommendations (already completed or currently pending)
+                if (completedTitles.has(titleClean) || activeTitles.has(titleClean)) {
+                    return;
+                }
+                let score = 0;
+                const reasons = [];
+                // A. Category Preference (Max 30 pts)
+                const catRank = sortedCategories.indexOf(cat);
+                if (catRank === 0) {
+                    score += 30;
+                    reasons.push('Matches your most completed focus area');
+                }
+                else if (catRank === 1) {
+                    score += 20;
+                    reasons.push('Aligns with your secondary focus area');
+                }
+                else if (catRank > 1) {
+                    score += 10;
+                    reasons.push('Aligns with a previously completed topic');
+                }
+                else {
+                    score += 5;
+                }
+                // B. Difficulty Progression (Max 25 pts)
+                if (diff === targetDiff) {
+                    score += 25;
+                    reasons.push(`Target progression level: ${diff}`);
+                }
+                else {
+                    // If task difficulty is one step away
+                    const isOneStep = (diff === 'intermediate' && (targetDiff === 'beginner' || targetDiff === 'advanced')) ||
+                        (diff === 'beginner' && targetDiff === 'intermediate') ||
+                        (diff === 'advanced' && targetDiff === 'intermediate');
+                    if (isOneStep) {
+                        score += 10;
+                    }
+                }
+                // C. Completion History (Max 10 pts)
+                const completionsInCat = categoryCounts[cat] || 0;
+                if (completionsInCat > 0) {
+                    score += Math.min(10, completionsInCat * 3.5);
+                    reasons.push('Aligns with your category completion history');
+                }
+                // C. Productivity Pattern (Max 15 pts)
+                if (cat === preferredCategory) {
+                    score += 15;
+                    reasons.push('In your fastest-completed category');
+                }
+                // D. Recommendation Diversity (Max 15 pts)
+                // If the user has fiew completions here but is doing other things, encourage diversity
+                const completionsCount = categoryCounts[cat] || 0;
+                if (completionsCount === 0 && completedTasks.length > 0) {
+                    score += 15;
+                    reasons.push('Introduces a fresh category for skill diversity');
+                }
+                // E. Recent Activity Weight (Max 15 pts)
+                if (recentCategories.has(cat)) {
+                    score += 15;
+                    reasons.push('Matches active learning topics this week');
+                }
+                scoredPool.push({
+                    task: title,
+                    category: cat,
+                    score: Math.min(100, score),
+                    reason: reasons.length > 0 ? reasons.join(', ') : 'Suggested skill enhancement',
+                    difficulty: diff,
+                });
+            });
+        });
+    });
+    // Sort pool by score descending
+    scoredPool.sort((a, b) => b.score - a.score);
+    // Take top 3 recommendations
+    const topRecommendations = scoredPool.slice(0, 3);
+    const recommendedTitles = topRecommendations.map((r) => r.task);
+    let explanation = `Based on your recent completions, you are heavily focusing on "${topCategory}". We generated next-level progressive challenges for you!`;
+    if (recommendedTitles.length === 0) {
+        explanation = 'No new recommendations are available yet. Complete more varied tasks to unlock the next recommendation set.';
     }
-    else if (beginnerCount >= 3 && intermediateCount >= 3) {
-        targetDifficulty = 'advanced';
-        explanation += ` Having mastered ${intermediateCount} intermediate items, we recommend Advanced exercises!`;
-    }
-    // 3. Extract recommendations from that tier pool
-    const pool = (PROGRESSIVE_TASKS[topCategory] || PROGRESSIVE_TASKS.other)[targetDifficulty];
-    const existingTitles = new Set(userTasks.map((t) => t.title.toLowerCase().trim()));
-    // Filter out recommendations already in tasks (to avoid repetition)
-    let recommended = pool.filter((title) => !existingTitles.has(title.toLowerCase().trim()));
-    // Fallback if all recommended items are already added
-    if (recommended.length === 0) {
-        // Fall back to general other category, or the next level, or just return pool items
-        recommended = pool;
-    }
-    // Limit to top 3 recommendations
-    recommended = recommended.slice(0, 3);
     return {
+        hasEnoughData: true,
         topCategory,
-        recommendedTasks: recommended,
+        recommendedTasks: recommendedTitles,
         explanation,
+        recommendations: topRecommendations,
     };
 };
 exports.getSmartRecommendations = getSmartRecommendations;
@@ -216,39 +306,44 @@ const getSmartInsights = async (userId) => {
     const totalTasks = userTasks.length;
     const completedTasks = userTasks.filter((t) => t.status === 'completed');
     const totalCompleted = completedTasks.length;
+    // Real data check: Require at least 3 completed tasks to generate insights
+    if (totalCompleted < 3) {
+        return {
+            hasEnoughData: false,
+            productivityScore: 0,
+            focusScore: 0,
+            consistencyScore: 0,
+            learningScore: 0,
+            weeklyGrowthScore: 0,
+            insights: [],
+            predictedWorkingHours: 'N/A',
+            message: 'AI Insights will appear after sufficient activity data is collected.',
+        };
+    }
     // 1. Productivity Score: Completion percentage weighted by priority
-    let productivityScore = 0;
-    if (totalTasks > 0) {
-        const totalWeights = userTasks.reduce((sum, t) => {
-            const w = t.priority === 'high' ? 1.5 : t.priority === 'low' ? 0.75 : 1.0;
-            return sum + w;
-        }, 0);
-        const completedWeights = completedTasks.reduce((sum, t) => {
-            const w = t.priority === 'high' ? 1.5 : t.priority === 'low' ? 0.75 : 1.0;
-            return sum + w;
-        }, 0);
-        productivityScore = Math.round((completedWeights / totalWeights) * 100);
-    }
+    const totalWeights = userTasks.reduce((sum, t) => {
+        const w = t.priority === 'high' ? 1.5 : t.priority === 'low' ? 0.75 : 1.0;
+        return sum + w;
+    }, 0);
+    const completedWeights = completedTasks.reduce((sum, t) => {
+        const w = t.priority === 'high' ? 1.5 : t.priority === 'low' ? 0.75 : 1.0;
+        return sum + w;
+    }, 0);
+    let productivityScore = Math.round((completedWeights / totalWeights) * 100);
     productivityScore = Math.min(100, Math.max(0, productivityScore));
-    // 2. Focus Score: Category concentration (Entropy-inspired metric)
-    let focusScore = 50;
-    if (totalCompleted > 0) {
-        const counts = {};
-        completedTasks.forEach((t) => {
-            counts[t.category] = (counts[t.category] || 0) + 1;
-        });
-        const maxCompletions = Math.max(...Object.values(counts));
-        // Score based on concentration in the peak category
-        focusScore = Math.round((maxCompletions / totalCompleted) * 100);
-    }
+    // 2. Focus Score: Category concentration
+    const counts = {};
+    completedTasks.forEach((t) => {
+        counts[t.category] = (counts[t.category] || 0) + 1;
+    });
+    const maxCompletions = Math.max(...Object.values(counts));
+    const focusScore = Math.round((maxCompletions / totalCompleted) * 100);
     // 3. Consistency Score: Streak + frequency
-    // Calculate completion date stamps
     const dates = completedTasks
-        .map((t) => t.completedAt ? new Date(t.completedAt) : null)
+        .map((t) => (t.completedAt ? new Date(t.completedAt) : null))
         .filter((d) => d !== null);
     let streak = 0;
     if (dates.length > 0) {
-        // Sort dates descending
         dates.sort((a, b) => b.getTime() - a.getTime());
         const uniqueDays = Array.from(new Set(dates.map((d) => d.toLocaleDateString())));
         const today = new Date();
@@ -277,16 +372,13 @@ const getSmartInsights = async (userId) => {
         }
     }
     const uniqueDaysCount = new Set(dates.map((d) => d.toDateString())).size;
-    const consistencyScore = Math.min(100, (streak * 15) + (uniqueDaysCount * 6));
+    const consistencyScore = Math.min(100, streak * 15 + uniqueDaysCount * 6);
     // 4. Learning Score: Based on completed difficulty weights
-    let learningScore = 0;
-    if (totalCompleted > 0) {
-        const diffWeights = completedTasks.reduce((sum, t) => {
-            const d = t.difficulty === 'advanced' ? 3 : t.difficulty === 'intermediate' ? 2 : 1;
-            return sum + d;
-        }, 0);
-        learningScore = Math.round((diffWeights / (totalCompleted * 3)) * 100);
-    }
+    const diffWeights = completedTasks.reduce((sum, t) => {
+        const d = t.difficulty === 'advanced' ? 3 : t.difficulty === 'intermediate' ? 2 : 1;
+        return sum + d;
+    }, 0);
+    const learningScore = Math.round((diffWeights / (totalCompleted * 3)) * 100);
     // 5. Weekly Growth Score: Task completion output this week vs last week
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
@@ -299,18 +391,18 @@ const getSmartInsights = async (userId) => {
         growthPercent = Math.round(((completedThisWeek - completedLastWeek) / completedLastWeek) * 100);
     }
     else if (completedThisWeek > 0) {
-        growthPercent = 14; // Default visual growth starter if no baseline
+        growthPercent = 15;
     }
     const weeklyGrowthScore = Math.min(100, Math.max(0, 50 + growthPercent));
-    // 6. Time of day analysis for preferred hours
+    // 6. Time of day analysis
     const hours = completedTasks
-        .map((t) => t.completedAt ? new Date(t.completedAt).getHours() : null)
+        .map((t) => (t.completedAt ? new Date(t.completedAt).getHours() : null))
         .filter((h) => h !== null);
     const hourSlots = {
-        morning: 0, // 6am - 12pm
-        afternoon: 0, // 12pm - 5pm
-        evening: 0, // 5pm - 9pm
-        night: 0, // 9pm - 6am
+        morning: 0,
+        afternoon: 0,
+        evening: 0,
+        night: 0,
     };
     hours.forEach((h) => {
         if (h >= 6 && h < 12)
@@ -323,10 +415,10 @@ const getSmartInsights = async (userId) => {
             hourSlots.night++;
     });
     let peakSlot = 'evening';
-    let maxCompletions = 0;
+    let maxHourCompletions = 0;
     Object.entries(hourSlots).forEach(([slot, val]) => {
-        if (val > maxCompletions) {
-            maxCompletions = val;
+        if (val > maxHourCompletions) {
+            maxHourCompletions = val;
             peakSlot = slot;
         }
     });
@@ -343,47 +435,46 @@ const getSmartInsights = async (userId) => {
         insights.push(`Your productivity increased by ${growthPercent}% this week.`);
     }
     else if (growthPercent < 0) {
-        insights.push(`Your productivity decreased by ${Math.abs(growthPercent)}% this week. Block off focus hours.`);
+        insights.push(`Your productivity decreased by ${Math.abs(growthPercent)}% this week. Consider blocking focus hours.`);
     }
     else {
-        insights.push(`Your productivity increased by 14% this week.`); // placeholder starter fallback
+        insights.push(`Your productivity remains stable compared to last week.`);
     }
     // Category completion speed analysis
     let categorySpeedText = 'development';
-    if (totalCompleted > 0) {
-        const categorySpeedSum = {};
-        const categorySpeedCount = {};
-        completedTasks.forEach((t) => {
-            if (t.completedAt && t.createdAt) {
-                const diff = new Date(t.completedAt).getTime() - new Date(t.createdAt).getTime();
-                const diffMinutes = diff / (1000 * 60);
-                categorySpeedSum[t.category] = (categorySpeedSum[t.category] || 0) + diffMinutes;
-                categorySpeedCount[t.category] = (categorySpeedCount[t.category] || 0) + 1;
-            }
-        });
-        let minAvg = Infinity;
-        let fastestCategory = '';
-        Object.keys(categorySpeedCount).forEach((cat) => {
-            const avg = categorySpeedSum[cat] / categorySpeedCount[cat];
-            if (avg < minAvg) {
-                minAvg = avg;
-                fastestCategory = cat;
-            }
-        });
-        if (fastestCategory) {
-            categorySpeedText = fastestCategory;
+    const categorySpeedSum = {};
+    const categorySpeedCount = {};
+    completedTasks.forEach((t) => {
+        if (t.completedAt && t.createdAt) {
+            const diff = new Date(t.completedAt).getTime() - new Date(t.createdAt).getTime();
+            const diffMinutes = diff / (1000 * 60);
+            categorySpeedSum[t.category] = (categorySpeedSum[t.category] || 0) + diffMinutes;
+            categorySpeedCount[t.category] = (categorySpeedCount[t.category] || 0) + 1;
         }
+    });
+    let minAvg = Infinity;
+    let fastestCategory = '';
+    Object.keys(categorySpeedCount).forEach((cat) => {
+        const avg = categorySpeedSum[cat] / categorySpeedCount[cat];
+        if (avg < minAvg) {
+            minAvg = avg;
+            fastestCategory = cat;
+        }
+    });
+    if (fastestCategory) {
+        categorySpeedText = fastestCategory;
     }
-    insights.push(`You complete ${categorySpeedText} tasks fastest during ${peakSlot} hours.`);
-    const completionRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 82;
-    insights.push(`You maintain an average completion rate of ${completionRate}%.`);
-    insights.push(`You are most productive between ${workingHoursText}.`);
+    insights.push(`You complete ${categorySpeedText} tasks fastest during your preferred ${peakSlot} hours.`);
+    const completionRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 0;
+    insights.push(`You maintain a task completion rate of ${completionRate}%.`);
+    insights.push(`Your most active productivity window is between ${workingHoursText}.`);
     return {
-        productivityScore: productivityScore || 75,
-        focusScore: focusScore || 68,
-        consistencyScore: consistencyScore || 80,
-        learningScore: learningScore || 60,
-        weeklyGrowthScore: weeklyGrowthScore || 72,
+        hasEnoughData: true,
+        productivityScore,
+        focusScore,
+        consistencyScore,
+        learningScore,
+        weeklyGrowthScore,
         insights,
         predictedWorkingHours: workingHoursText,
     };

@@ -38,10 +38,21 @@ const UserSchema = new Schema<IUser>(
     avatarColor: {
       type: String,
     },
+    profileImage: {
+      type: String,
+    },
     settings: {
       theme: {
         type: String,
         default: 'light',
+      },
+      emailNotifications: {
+        type: Boolean,
+        default: true,
+      },
+      taskSorting: {
+        type: String,
+        default: 'newest',
       },
     },
   },

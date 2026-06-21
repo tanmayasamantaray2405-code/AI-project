@@ -67,7 +67,7 @@ const runTest = async () => {
             throw new Error('Expected recommended tasks to be suggested, got an empty array');
         }
         // Verify that already added tasks are not recommended
-        const containsExisting = recommendations.recommendedTasks.some(title => title.toLowerCase() === 'build a crud app');
+        const containsExisting = recommendations.recommendedTasks.some((title) => title.toLowerCase() === 'build a crud app');
         if (containsExisting) {
             throw new Error('Recommendation system suggested a task title that already exists in user database!');
         }

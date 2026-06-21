@@ -9,8 +9,11 @@ export interface IUser extends Document {
   otpExpires?: Date;
   otpVerified?: boolean;
   avatarColor?: string;
+  profileImage?: string;
   settings?: {
     theme: string;
+    emailNotifications?: boolean;
+    taskSorting?: string;
   };
   comparePassword(password: string): Promise<boolean>;
   createdAt: Date;

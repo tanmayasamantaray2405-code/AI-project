@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { apiRequest } from '../utils/api';
 import GlassCard from '../components/GlassCard';
 import ThemeToggle from '../components/ThemeToggle';
+import CustomDropdown, { type DropdownOption } from '../components/CustomDropdown';
+import CommandPalette from '../components/CommandPalette';
 import { 
   Cpu, LogOut, CheckCircle2, Circle, Trash2, Plus, Edit3,
   Sparkles, Flame, Check, TrendingUp, CircleAlert, Search,
@@ -32,8 +34,11 @@ interface User {
   name: string;
   email: string;
   avatarColor?: string;
+  profileImage?: string;
   settings?: {
     theme: string;
+    emailNotifications?: boolean;
+    taskSorting?: string;
   };
 }
 
@@ -44,6 +49,7 @@ interface DashboardPageProps {
 }
 
 interface InsightsData {
+  hasEnoughData?: boolean;
   productivityScore: number;
   focusScore: number;
   consistencyScore: number;
@@ -51,6 +57,15 @@ interface InsightsData {
   weeklyGrowthScore: number;
   insights: string[];
   predictedWorkingHours: string;
+  message?: string;
+}
+
+interface RecommendationItem {
+  task: string;
+  category: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced';
+  score: number;
+  reason: string;
 }
 
 export default function DashboardPage({ user: initialUser, onLogout, onNavigate }: DashboardPageProps) {
@@ -75,9 +90,11 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
 
   // AI recommendations & insights
   const [recommendations, setRecommendations] = useState<{
-    topCategory: string;
+    hasEnoughData?: boolean;
+    topCategory: string | null;
     recommendedTasks: string[];
     explanation: string;
+    recommendations?: RecommendationItem[];
   } | null>(null);
   const [recLoading, setRecLoading] = useState(false);
   
@@ -87,12 +104,22 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
   // Modals & Popovers UI states
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [activeModal, setActiveModal] = useState<'profile' | 'password' | 'settings' | 'shortcuts' | 'edit-task' | null>(null);
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'preferences' | 'security' | 'danger'>('profile');
+  const [emailNotifications, setEmailNotifications] = useState(initialUser.settings?.emailNotifications ?? true);
+  const [taskSortingPref, setTaskSortingPref] = useState(initialUser.settings?.taskSorting ?? 'newest');
+  const [avatarColorPref, setAvatarColorPref] = useState(initialUser.avatarColor || 'from-violet-600 to-indigo-600');
+  const [profileImagePref, setProfileImagePref] = useState(initialUser.profileImage || '');
+  const [confirmDeleteText, setConfirmDeleteText] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([]);
   
   // Profile form edits
-  const [editName, setEditName] = useState(user.name);
-  const [editEmail, setEditEmail] = useState(user.email);
+  const [editName, setEditName] = useState(initialUser.name);
+  const [editEmail, setEditEmail] = useState(initialUser.email);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -133,7 +160,7 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
   const fetchRecommendations = async () => {
     try {
       setRecLoading(true);
-      const recRes = await apiRequest(`/recommendations/${user._id}`);
+      const recRes = await apiRequest('/recommendations/me');
       if (recRes.success) {
         setRecommendations(recRes.data);
       }
@@ -147,7 +174,7 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
   const fetchInsights = async () => {
     try {
       setInsightsLoading(true);
-      const insightsRes = await apiRequest(`/recommendations/${user._id}/insights`);
+      const insightsRes = await apiRequest('/recommendations/me/insights');
       if (insightsRes.success) {
         setInsights(insightsRes.data);
       }
@@ -156,6 +183,22 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
     } finally {
       setInsightsLoading(false);
     }
+  };
+
+  const addNotification = (title: string, text: string, type: 'info' | 'success' | 'warning' = 'info') => {
+    const newNotice = {
+      id: Math.random().toString(),
+      title,
+      text,
+      read: false,
+      time: new Date().toLocaleTimeString(),
+      type,
+    };
+    setNotifications((prev) => {
+      const updated = [newNotice, ...prev];
+      localStorage.setItem(`notifications_${user._id}`, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   useEffect(() => {
@@ -167,6 +210,19 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
       setTourStep(1); // Auto launch tour
     }
 
+    // Load saved notifications
+    const savedNotifications = localStorage.getItem(`notifications_${user._id}`);
+    if (savedNotifications) {
+      setNotifications(JSON.parse(savedNotifications));
+    } else {
+      const initialNotices = [
+        { id: 'init-1', title: 'System Connected', text: 'You are running on a local SaaS-grade framework.', read: false, time: new Date().toLocaleTimeString(), type: 'success' },
+        { id: 'init-2', title: 'Keyboard Shortcuts Active', text: 'Press ? anywhere to open quick mapping controls or Ctrl + K for spotlight search.', read: false, time: new Date().toLocaleTimeString(), type: 'info' },
+      ];
+      setNotifications(initialNotices);
+      localStorage.setItem(`notifications_${user._id}`, JSON.stringify(initialNotices));
+    }
+
     // Load initial activity logs
     setActivityLogs([
       { id: '1', text: 'Workspace session initialized successfully.', time: new Date().toLocaleTimeString() }
@@ -176,7 +232,14 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
   // Keyboard Shortcuts Hook
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Avoid triggering when in text inputs or textareas
+      // Toggle Command Palette (Ctrl+K or Cmd+K)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+        return;
+      }
+
+      // Avoid triggering other single-key shortcuts when in text inputs
       const activeEl = document.activeElement;
       const isInput = activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement || activeEl instanceof HTMLSelectElement;
 
@@ -258,6 +321,7 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
         setTaskTitle('');
         setTaskDueDate('');
         showNotice('success', 'Task added successfully');
+        addNotification('Task Created', `"${res.data.title}" was added to your workspace.`, 'success');
         addLog(`Created task: "${res.data.title}" (${res.data.priority} priority)`);
         
         // Refresh recommendation parameters
@@ -281,6 +345,7 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
       if (res.success) {
         setTasks(tasks.map((t) => (t._id === task._id ? res.data : t)));
         showNotice('success', nextStatus === 'completed' ? 'Task completed! Keep it up!' : 'Task set to pending');
+        addNotification(nextStatus === 'completed' ? 'Task Completed' : 'Task Reopened', `"${task.title}" is now ${nextStatus}.`, nextStatus === 'completed' ? 'success' : 'info');
         addLog(`${nextStatus === 'completed' ? 'Completed' : 'Reopened'} task: "${task.title}"`);
         
         // Update charts & insights
@@ -345,13 +410,13 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
   };
 
   // Adopt AI suggestion
-  const handleAddRecommendedTask = async (title: string) => {
+  const handleAddRecommendedTask = async (title: string, categoryOverride?: string) => {
     try {
       const res = await apiRequest('/tasks', {
         method: 'POST',
         body: {
           title,
-          category: recommendations?.topCategory || 'coding',
+          category: categoryOverride || recommendations?.topCategory || 'coding',
           priority: 'medium',
           difficulty: 'beginner',
           userId: user._id,
@@ -370,6 +435,52 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
     }
   };
 
+  const handleCommandCreateTask = async (title: string) => {
+    if (!title.trim()) return;
+    try {
+      const res = await apiRequest('/tasks', {
+        method: 'POST',
+        body: {
+          title: title.trim(),
+          category: taskCategory,
+          priority: 'medium',
+          difficulty: 'beginner',
+          userId: user._id,
+        },
+      });
+
+      if (res.success) {
+        setTasks([res.data, ...tasks]);
+        showNotice('success', 'Task created from command palette');
+        addLog(`Created task from command palette: "${res.data.title}"`);
+        fetchRecommendations();
+        fetchInsights();
+      }
+    } catch (err: any) {
+      showNotice('error', err.message || 'Error creating task');
+    }
+  };
+
+  const handleCommandNavigate = (action: 'profile' | 'password' | 'settings' | 'shortcuts' | 'logout') => {
+    if (action === 'logout') {
+      onLogout();
+      return;
+    }
+    // Map command palette actions to the unified settings modal with correct tab
+    if (action === 'profile') {
+      setSettingsTab('profile');
+      setActiveModal('settings');
+    } else if (action === 'password') {
+      setSettingsTab('security');
+      setActiveModal('settings');
+    } else if (action === 'settings') {
+      setSettingsTab('preferences');
+      setActiveModal('settings');
+    } else {
+      setActiveModal(action as any);
+    }
+  };
+
   // Profile update
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -381,6 +492,8 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
         body: {
           name: editName,
           email: editEmail,
+          avatarColor: avatarColorPref,
+          profileImage: profileImagePref
         },
       });
 
@@ -463,6 +576,53 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
       }
     } catch (err: any) {
       showNotice('error', 'Failed to update settings');
+    }
+  };
+
+  // Preferences Update (notifications, sort preferences)
+  const handleSavePreferences = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    try {
+      const response = await apiRequest('/users/settings', {
+        method: 'PUT',
+        body: {
+          emailNotifications,
+          taskSorting: taskSortingPref
+        }
+      });
+      if (response.success && response.data) {
+        setUser(response.data);
+        localStorage.setItem('user', JSON.stringify(response.data));
+        showNotice('success', 'Preferences updated successfully');
+        addLog('Updated workspace preferences.');
+        setActiveModal(null);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to update preferences');
+      showNotice('error', err.message || 'Failed to update preferences');
+    }
+  };
+
+  // Delete Account
+  const handleDeleteAccount = async () => {
+    setError('');
+    try {
+      const response = await apiRequest('/users/profile', {
+        method: 'DELETE'
+      });
+      if (response.success) {
+        showNotice('success', 'Account deleted successfully');
+        // Clear all user data from localStorage
+        localStorage.removeItem('user');
+        localStorage.removeItem('token');
+        localStorage.removeItem(`notifications_${user._id}`);
+        localStorage.removeItem(`tour_completed_${user._id}`);
+        onLogout();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete account');
+      showNotice('error', err.message || 'Failed to delete account');
     }
   };
 
@@ -571,6 +731,16 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
     return streak;
   };
   const streakCount = calculateStreak();
+  const unreadNotifications = notifications.filter((notice) => !notice.read).length;
+  const markAllNotificationsRead = () => {
+    const updated = notifications.map((notice) => ({ ...notice, read: true }));
+    setNotifications(updated);
+    localStorage.setItem(`notifications_${user._id}`, JSON.stringify(updated));
+  };
+  const clearNotifications = () => {
+    setNotifications([]);
+    localStorage.setItem(`notifications_${user._id}`, JSON.stringify([]));
+  };
 
   // Badge Unlocks logic
   const badges = [
@@ -633,6 +803,26 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
     intermediate: 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/20',
     beginner: 'bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 border-cyan-500/20',
   };
+
+  const categoryOptions: DropdownOption[] = [
+    { value: 'coding', label: 'Coding' },
+    { value: 'design', label: 'Design' },
+    { value: 'study', label: 'Study' },
+    { value: 'fitness', label: 'Fitness' },
+    { value: 'business', label: 'Business' },
+    { value: 'health', label: 'Health' },
+    { value: 'other', label: 'Other' },
+  ];
+  const priorityOptions: DropdownOption[] = [
+    { value: 'high', label: 'High' },
+    { value: 'medium', label: 'Medium' },
+    { value: 'low', label: 'Low' },
+  ];
+  const difficultyOptions: DropdownOption[] = [
+    { value: 'beginner', label: 'Beginner' },
+    { value: 'intermediate', label: 'Intermediate' },
+    { value: 'advanced', label: 'Advanced' },
+  ];
 
   // Chart data setup
   const categoryCounts = tasks.reduce((acc: Record<string, number>, t) => {
@@ -763,45 +953,13 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                 title="Workspace Updates"
               >
                 <Bell className="h-5 w-5" />
-                {streakCount > 0 && (
-                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                {unreadNotifications > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-violet-600 text-white text-[9px] font-black flex items-center justify-center">
+                    {unreadNotifications}
+                  </span>
                 )}
               </button>
 
-              <AnimatePresence>
-                {notificationsOpen && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 15 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 15 }}
-                    className="absolute right-0 mt-3 w-80 rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 shadow-2xl p-4 z-50 text-xs"
-                  >
-                    <div className="flex justify-between items-center pb-3 border-b border-slate-150 dark:border-white/5 mb-3">
-                      <span className="font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">Alert Center</span>
-                      <button onClick={() => setNotificationsOpen(false)} className="text-slate-400 hover:text-slate-650"><X className="h-4 w-4" /></button>
-                    </div>
-                    <div className="space-y-3">
-                      <div className="p-2 rounded-xl bg-violet-500/5 border border-violet-500/10">
-                        <p className="font-bold text-slate-800 dark:text-slate-200">System Connected</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">You are running on a local SaaS-grade framework.</p>
-                      </div>
-                      {streakCount > 0 && (
-                        <div className="p-2 rounded-xl bg-amber-500/5 border border-amber-500/10 flex items-start gap-2">
-                          <Flame className="h-4 w-4 text-amber-500 mt-0.5" />
-                          <div>
-                            <p className="font-bold text-slate-800 dark:text-slate-200">Active Streak! ({streakCount} days)</p>
-                            <p className="text-[10px] text-slate-400 mt-0.5">Keep completing tasks daily to lock in achievements.</p>
-                          </div>
-                        </div>
-                      )}
-                      <div className="p-2 rounded-xl bg-slate-500/5 border border-slate-200/10">
-                        <p className="font-bold text-slate-800 dark:text-slate-200">Keyboard Shortcuts active</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Press <span className="font-bold">?</span> anywhere to open quick mapping controls.</p>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
 
             <ThemeToggle />
@@ -811,80 +969,154 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
               <button
                 onClick={() => setProfileMenuOpen(!profileMenuOpen)}
                 id="avatar-menu-trigger"
-                className={`h-9 w-9 rounded-full bg-gradient-to-tr ${avatarGradient} flex items-center justify-center text-white font-black text-sm shadow cursor-pointer border border-white/30 hover:brightness-105 active:scale-95 transition-all`}
+                className={`h-9 w-9 rounded-full bg-gradient-to-tr ${avatarGradient} flex items-center justify-center text-white font-black text-sm shadow cursor-pointer border border-white/30 hover:brightness-105 active:scale-95 transition-all overflow-hidden`}
               >
-                {userInitials}
+                {user.profileImage ? (
+                  <img
+                    src={user.profileImage}
+                    alt={user.name}
+                    className="h-full w-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  />
+                ) : (
+                  userInitials
+                )}
               </button>
 
-              <AnimatePresence>
-                {profileMenuOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-3 w-56 rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-slate-900 shadow-2xl p-2 z-50 text-sm font-semibold"
-                  >
-                    <div className="px-3 py-2 border-b border-slate-100 dark:border-white/5 mb-1.5 flex flex-col">
-                      <span className="text-xs text-slate-450 dark:text-slate-500 font-medium">Logged in as</span>
-                      <span className="font-extrabold text-slate-900 dark:text-white truncate">{user.name}</span>
-                    </div>
-
-                    <button
-                      onClick={() => { setProfileMenuOpen(false); setActiveModal('profile'); }}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-350 flex items-center gap-2 transition cursor-pointer"
-                    >
-                      <User className="h-4 w-4 text-slate-400" />
-                      My Profile
-                    </button>
-
-                    <button
-                      onClick={() => { setProfileMenuOpen(false); setActiveModal('password'); }}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-350 flex items-center gap-2 transition cursor-pointer"
-                    >
-                      <Shield className="h-4 w-4 text-slate-400" />
-                      Change Password
-                    </button>
-
-                    <button
-                      onClick={() => { setProfileMenuOpen(false); setActiveModal('settings'); }}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-350 flex items-center gap-2 transition cursor-pointer"
-                    >
-                      <Settings className="h-4 w-4 text-slate-400" />
-                      Account Settings
-                    </button>
-
-                    <div className="border-t border-slate-100 dark:border-white/5 my-1" />
-
-                    <button
-                      onClick={() => { setProfileMenuOpen(false); onLogout(); }}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-600 dark:text-red-400 flex items-center gap-2 transition cursor-pointer"
-                    >
-                      <LogOut className="h-4 w-4" />
-                      Logout
-                    </button>
-
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
 
           </div>
         </div>
       </header>
 
-      {/* TOAST SYSTEM */}
-      {notification && (
-        <div className="fixed top-20 right-4 z-50 animate-bounce print:hidden">
-          <div className={`px-4 py-3 rounded-xl border shadow-xl flex items-center gap-2 text-xs font-bold ${
-            notification.type === 'success' 
-              ? 'border-emerald-500/25 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400'
-              : 'border-red-500/25 bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400'
-          }`}>
-            {notification.type === 'success' ? <Check className="h-4.5 w-4.5" /> : <CircleAlert className="h-4.5 w-4.5" />}
-            {notification.text}
+      <AnimatePresence>
+        {notificationsOpen && (
+          <div className="fixed inset-0 z-[9998] print:hidden" onClick={() => setNotificationsOpen(false)}>
+            <motion.aside
+              role="dialog"
+              aria-modal="true"
+              aria-label="Notification center"
+              initial={{ opacity: 0, x: 32 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 32 }}
+              onClick={(e) => e.stopPropagation()}
+              className="fixed right-3 top-20 w-[calc(100vw-1.5rem)] max-w-sm rounded-2xl border border-slate-200/70 dark:border-white/10 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl shadow-2xl p-4 z-[9999] text-xs"
+            >
+              <div className="flex justify-between items-center pb-3 border-b border-slate-150 dark:border-white/5 mb-3">
+                <div>
+                  <span className="font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">Notification Center</span>
+                  <p className="text-[10px] text-slate-400 mt-0.5">{unreadNotifications} unread updates</p>
+                </div>
+                <button onClick={() => setNotificationsOpen(false)} className="text-slate-400 hover:text-slate-650" aria-label="Close notifications"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="flex gap-2 mb-3">
+                <button onClick={markAllNotificationsRead} className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 font-bold">Mark read</button>
+                <button onClick={clearNotifications} className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 font-bold">Clear all</button>
+              </div>
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+                {notifications.length > 0 ? notifications.map((notice) => (
+                  <div key={notice.id} className={`p-3 rounded-xl border ${notice.read ? 'bg-slate-500/5 border-slate-200/50 dark:border-white/10' : 'bg-violet-500/10 border-violet-500/20'}`}>
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-bold text-slate-800 dark:text-slate-200">{notice.title}</p>
+                      {!notice.read && <span className="h-2 w-2 rounded-full bg-violet-500 mt-1" />}
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">{notice.text}</p>
+                    <p className="text-[9px] text-slate-400 mt-2">{notice.time}</p>
+                  </div>
+                )) : (
+                  <div className="text-center py-10">
+                    <Bell className="h-8 w-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+                    <p className="font-extrabold text-slate-700 dark:text-slate-300">No Notifications</p>
+                    <p className="text-slate-400 mt-1">Important workspace updates will appear here.</p>
+                  </div>
+                )}
+              </div>
+            </motion.aside>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {profileMenuOpen && (
+          <div className="fixed inset-0 z-[9998] print:hidden" onClick={() => setProfileMenuOpen(false)}>
+            <motion.div
+              role="menu"
+              aria-label="Profile menu"
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              onClick={(e) => e.stopPropagation()}
+              className="fixed right-3 top-20 w-64 rounded-2xl border border-slate-200/70 dark:border-white/10 bg-white/90 dark:bg-slate-950/90 backdrop-blur-xl shadow-2xl p-2 z-[9999] text-sm font-semibold"
+            >
+              <div className="px-3 py-3 border-b border-slate-100 dark:border-white/5 mb-1.5 flex items-center gap-3">
+                <div className={`h-9 w-9 rounded-full flex-shrink-0 bg-gradient-to-tr ${avatarGradient} flex items-center justify-center text-white font-black text-sm overflow-hidden`}>
+                  {user.profileImage ? (
+                    <img src={user.profileImage} alt={user.name} className="h-full w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                  ) : userInitials}
+                </div>
+                <div className="min-w-0">
+                  <span className="font-extrabold text-slate-900 dark:text-white truncate block text-xs">{user.name}</span>
+                  <span className="text-[10px] text-slate-400 truncate block">{user.email}</span>
+                </div>
+              </div>
+              {[
+                { label: 'My Profile', icon: User, tab: 'profile' as const },
+                { label: 'Edit Profile', icon: Edit3, tab: 'profile' as const },
+                { label: 'Change Password', icon: Shield, tab: 'security' as const },
+                { label: 'Theme Settings', icon: Settings, tab: 'preferences' as const },
+              ].map((item) => (
+                <button key={item.label} onClick={() => { setProfileMenuOpen(false); setSettingsTab(item.tab); setActiveModal('settings'); }} className="w-full text-left px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-white/5 text-slate-700 dark:text-slate-350 flex items-center gap-2 transition cursor-pointer font-bold">
+                  <item.icon className="h-4 w-4 text-slate-400" />
+                  {item.label}
+                </button>
+              ))}
+              <div className="border-t border-slate-100 dark:border-white/5 my-1" />
+              <button onClick={() => { setProfileMenuOpen(false); onLogout(); }} className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-600 dark:text-red-400 flex items-center gap-2 transition cursor-pointer">
+                <LogOut className="h-4 w-4" />
+                Logout
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        tasks={tasks}
+        onToggleTask={handleToggleTask}
+        onCreateTask={handleCommandCreateTask}
+        onNavigateAction={handleCommandNavigate}
+        onToggleTheme={() => {
+          const docRoot = window.document.documentElement;
+          const nextDark = !docRoot.classList.contains('dark');
+          docRoot.classList.toggle('dark', nextDark);
+          localStorage.setItem('darkMode', String(nextDark));
+          showNotice('success', `Theme set to ${nextDark ? 'Dark' : 'Light'}`);
+        }}
+      />
+
+      {/* TOAST SYSTEM */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -16, x: 16 }}
+            animate={{ opacity: 1, y: 0, x: 0 }}
+            exit={{ opacity: 0, y: -8, scale: 0.95 }}
+            transition={{ duration: 0.25, ease: 'easeOut' }}
+            className="fixed top-20 right-4 z-[9999] print:hidden"
+          >
+            <div className={`px-4 py-3 rounded-xl border shadow-2xl flex items-center gap-2.5 text-xs font-bold max-w-xs backdrop-blur-md ${
+              notification.type === 'success' 
+                ? 'border-emerald-500/30 bg-emerald-50/90 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400'
+                : 'border-red-500/30 bg-red-50/90 dark:bg-red-950/60 text-red-700 dark:text-red-400'
+            }`}>
+              {notification.type === 'success' ? <Check className="h-4 w-4 flex-shrink-0" /> : <CircleAlert className="h-4 w-4 flex-shrink-0" />}
+              <span>{notification.text}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* MAIN SPRINT INTERFACE */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6 space-y-6">
@@ -949,6 +1181,29 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
         {/* BROWSER DASHBOARD RENDER */}
         <div className="print:hidden space-y-6">
 
+          {/* Welcome Banner */}
+          <GlassCard className="p-6 border border-white/20 dark:border-white/5 bg-gradient-to-r from-violet-600/10 via-indigo-600/5 to-transparent relative overflow-hidden">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative z-10">
+              <div>
+                <h1 className="font-display text-2xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+                  Welcome back, <span className="text-violet-600 dark:text-violet-400">{user.name}</span>!
+                </h1>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md font-semibold">
+                  Here is your productivity outline for today. You have completed {completedTasks} tasks out of {totalTasks} ({completionRate}%). Keep up the great work!
+                </p>
+              </div>
+              <div className="flex items-center gap-4 bg-white/40 dark:bg-white/5 px-4 py-3 rounded-2xl border border-white/40 dark:border-white/10 backdrop-blur-md">
+                <div className="text-center">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Today's Streak</span>
+                  <div className="flex items-center justify-center gap-1 mt-0.5">
+                    <Flame className={`h-4.5 w-4.5 ${streakCount > 0 ? 'text-amber-500 animate-pulse' : 'text-slate-400'}`} />
+                    <span className="text-lg font-black text-slate-800 dark:text-white">{streakCount} Days</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </GlassCard>
+
           {/* AI INSIGHTS BAR DIALS PANEL */}
           <div id="tour-step-insights" className="relative">
             <GlassCard className="p-6 border border-violet-500/20 bg-gradient-to-r from-violet-600/5 to-cyan-500/5">
@@ -989,59 +1244,69 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
               </div>
 
               {/* Progress Metric Dials */}
+              {insights?.hasEnoughData === false ? (
+                <div className="rounded-2xl border border-slate-200/70 dark:border-white/10 bg-white/30 dark:bg-black/10 p-8 text-center">
+                  <Sparkles className="h-9 w-9 mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+                  <h4 className="font-display font-extrabold text-slate-900 dark:text-white">No Activity Data Collected</h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 max-w-md mx-auto">
+                    AI Insights will appear after sufficient activity data is collected. Complete at least 3 tasks to unlock productivity, focus, consistency, and trend analysis.
+                  </p>
+                </div>
+              ) : (
               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 
                 <div className="p-4 rounded-2xl border border-white/40 dark:border-white/5 bg-white/20 dark:bg-black/10 text-center">
                   <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest block mb-2">Productivity</span>
                   <div className="text-3xl font-black font-display text-violet-600 dark:text-violet-400">
-                    {insightsLoading ? '...' : `${insights?.productivityScore || 75}%`}
+                    {insightsLoading ? '...' : `${insights?.productivityScore ?? 0}%`}
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
-                    <div className="bg-violet-500 h-full transition-all duration-1000" style={{ width: `${insights?.productivityScore || 75}%` }} />
+                    <div className="bg-violet-500 h-full transition-all duration-1000" style={{ width: `${insights?.productivityScore ?? 0}%` }} />
                   </div>
                 </div>
 
                 <div className="p-4 rounded-2xl border border-white/40 dark:border-white/5 bg-white/20 dark:bg-black/10 text-center">
                   <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest block mb-2">Focus Score</span>
                   <div className="text-3xl font-black font-display text-cyan-600 dark:text-cyan-400">
-                    {insightsLoading ? '...' : `${insights?.focusScore || 68}%`}
+                    {insightsLoading ? '...' : `${insights?.focusScore ?? 0}%`}
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
-                    <div className="bg-cyan-500 h-full transition-all duration-1000" style={{ width: `${insights?.focusScore || 68}%` }} />
+                    <div className="bg-cyan-500 h-full transition-all duration-1000" style={{ width: `${insights?.focusScore ?? 0}%` }} />
                   </div>
                 </div>
 
                 <div className="p-4 rounded-2xl border border-white/40 dark:border-white/5 bg-white/20 dark:bg-black/10 text-center">
                   <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest block mb-2">Consistency</span>
                   <div className="text-3xl font-black font-display text-emerald-600 dark:text-emerald-400">
-                    {insightsLoading ? '...' : `${insights?.consistencyScore || 80}%`}
+                    {insightsLoading ? '...' : `${insights?.consistencyScore ?? 0}%`}
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
-                    <div className="bg-emerald-500 h-full transition-all duration-1000" style={{ width: `${insights?.consistencyScore || 80}%` }} />
+                    <div className="bg-emerald-500 h-full transition-all duration-1000" style={{ width: `${insights?.consistencyScore ?? 0}%` }} />
                   </div>
                 </div>
 
                 <div className="p-4 rounded-2xl border border-white/40 dark:border-white/5 bg-white/20 dark:bg-black/10 text-center">
                   <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest block mb-2">Learning Score</span>
                   <div className="text-3xl font-black font-display text-amber-600 dark:text-amber-400">
-                    {insightsLoading ? '...' : `${insights?.learningScore || 60}%`}
+                    {insightsLoading ? '...' : `${insights?.learningScore ?? 0}%`}
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
-                    <div className="bg-amber-500 h-full transition-all duration-1000" style={{ width: `${insights?.learningScore || 60}%` }} />
+                    <div className="bg-amber-500 h-full transition-all duration-1000" style={{ width: `${insights?.learningScore ?? 0}%` }} />
                   </div>
                 </div>
 
                 <div className="p-4 rounded-2xl border border-white/40 dark:border-white/5 bg-white/20 dark:bg-black/10 text-center col-span-2 md:col-span-1">
                   <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest block mb-2">Growth Score</span>
                   <div className="text-3xl font-black font-display text-pink-600 dark:text-pink-400">
-                    {insightsLoading ? '...' : `${insights?.weeklyGrowthScore || 72}%`}
+                    {insightsLoading ? '...' : `${insights?.weeklyGrowthScore ?? 0}%`}
                   </div>
                   <div className="w-full bg-slate-200 dark:bg-slate-800 h-1.5 rounded-full mt-3 overflow-hidden">
-                    <div className="bg-pink-500 h-full transition-all duration-1000" style={{ width: `${insights?.weeklyGrowthScore || 72}%` }} />
+                    <div className="bg-pink-500 h-full transition-all duration-1000" style={{ width: `${insights?.weeklyGrowthScore ?? 0}%` }} />
                   </div>
                 </div>
 
               </div>
+              )}
 
               {/* Dynamic generated Insight text items */}
               {insights && insights.insights.length > 0 && (
@@ -1087,26 +1352,30 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                     {recommendations.explanation}
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {recommendations.recommendedTasks.map((titleStr, index) => (
+                    {recommendations.recommendedTasks.map((titleStr, index) => {
+                      const recItem = recommendations.recommendations?.[index];
+                      const taskCategory = recItem?.category || recommendations.topCategory;
+                      return (
                       <div 
                         key={index}
                         className="p-4 rounded-xl border border-white/30 dark:border-white/5 bg-white/30 dark:bg-black/20 hover:border-violet-500/30 dark:hover:bg-black/30 transition flex flex-col justify-between items-start gap-4 group"
                       >
                         <div className="space-y-1">
                           <span className="px-2 py-0.5 rounded text-[9px] font-black uppercase bg-violet-500/10 text-violet-700 dark:text-violet-300 border border-violet-500/15">
-                            {recommendations.topCategory}
+                            {taskCategory}
                           </span>
                           <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-2">{titleStr}</h4>
                         </div>
                         <button
-                          onClick={() => handleAddRecommendedTask(titleStr)}
+                          onClick={() => handleAddRecommendedTask(titleStr, taskCategory)}
                           className="text-[10px] font-extrabold text-violet-600 dark:text-violet-400 hover:text-violet-750 flex items-center gap-1 group-hover:translate-x-0.5 transition-all cursor-pointer"
                         >
                           Adopt Task
                           <Plus className="h-3.5 w-3.5" />
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ) : (
@@ -1183,47 +1452,19 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label className="font-bold text-slate-500 uppercase tracking-wider">Category</label>
-                        <select
-                          value={taskCategory}
-                          onChange={(e) => setTaskCategory(e.target.value)}
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer focus:border-violet-505"
-                        >
-                          <option value="coding" className="dark:bg-slate-900">Coding</option>
-                          <option value="design" className="dark:bg-slate-900">Design</option>
-                          <option value="study" className="dark:bg-slate-900">Study</option>
-                          <option value="fitness" className="dark:bg-slate-900">Fitness</option>
-                          <option value="business" className="dark:bg-slate-900">Business</option>
-                          <option value="health" className="dark:bg-slate-900">Health</option>
-                          <option value="other" className="dark:bg-slate-900">Other</option>
-                        </select>
+                        <CustomDropdown options={categoryOptions} value={taskCategory} onChange={setTaskCategory} className="w-full" />
                       </div>
 
                       <div className="space-y-1">
                         <label className="font-bold text-slate-500 uppercase tracking-wider">Priority</label>
-                        <select
-                          value={taskPriority}
-                          onChange={(e) => setTaskPriority(e.target.value as any)}
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer focus:border-violet-505"
-                        >
-                          <option value="high" className="dark:bg-slate-900 text-rose-600 font-bold">High</option>
-                          <option value="medium" className="dark:bg-slate-900 text-amber-600 font-bold">Medium</option>
-                          <option value="low" className="dark:bg-slate-900 text-slate-500 font-bold">Low</option>
-                        </select>
+                        <CustomDropdown options={priorityOptions} value={taskPriority} onChange={(value) => setTaskPriority(value as any)} className="w-full" />
                       </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label className="font-bold text-slate-500 uppercase tracking-wider">Difficulty</label>
-                        <select
-                          value={taskDifficulty}
-                          onChange={(e) => setTaskDifficulty(e.target.value as any)}
-                          className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer focus:border-violet-505"
-                        >
-                          <option value="beginner" className="dark:bg-slate-900">Beginner</option>
-                          <option value="intermediate" className="dark:bg-slate-900">Intermediate</option>
-                          <option value="advanced" className="dark:bg-slate-900">Advanced</option>
-                        </select>
+                        <CustomDropdown options={difficultyOptions} value={taskDifficulty} onChange={(value) => setTaskDifficulty(value as any)} className="w-full" />
                       </div>
 
                       <div className="space-y-1">
@@ -1398,62 +1639,66 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                       ))}
                     </div>
 
-                    {/* Additional Select Filters */}
+                     {/* Additional Select Filters */}
                     <div className="flex flex-wrap items-center gap-2">
                       {/* Sort Dropdown */}
                       <div className="flex items-center gap-1.5">
                         <Sliders className="h-3.5 w-3.5 text-slate-400" />
-                        <select
+                        <CustomDropdown
+                          options={[
+                            { value: 'newest', label: 'Sort: Newest' },
+                            { value: 'dueDate', label: 'Sort: Due Date' },
+                            { value: 'priority', label: 'Sort: Priority' },
+                            { value: 'difficulty', label: 'Sort: Difficulty' },
+                          ]}
                           value={sortBy}
-                          onChange={(e) => setSortBy(e.target.value as any)}
-                          className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer text-[11px] font-semibold"
-                        >
-                          <option value="newest">Sort: Newest</option>
-                          <option value="dueDate">Sort: Due Date</option>
-                          <option value="priority">Sort: Priority</option>
-                          <option value="difficulty">Sort: Difficulty</option>
-                        </select>
+                          onChange={(val) => setSortBy(val as any)}
+                          className="min-w-[140px]"
+                        />
                       </div>
 
                       {/* Category select filter */}
-                      <select
+                      <CustomDropdown
+                        options={[
+                          { value: 'all', label: 'All Categories' },
+                          { value: 'coding', label: 'Coding' },
+                          { value: 'design', label: 'Design' },
+                          { value: 'study', label: 'Study' },
+                          { value: 'fitness', label: 'Fitness' },
+                          { value: 'business', label: 'Business' },
+                          { value: 'health', label: 'Health' },
+                          { value: 'other', label: 'Other' },
+                        ]}
                         value={filterCategory}
-                        onChange={(e) => setFilterCategory(e.target.value)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer text-[11px] font-semibold"
-                      >
-                        <option value="all">All Categories</option>
-                        <option value="coding">Coding</option>
-                        <option value="design">Design</option>
-                        <option value="study">Study</option>
-                        <option value="fitness">Fitness</option>
-                        <option value="business">Business</option>
-                        <option value="health">Health</option>
-                        <option value="other">Other</option>
-                      </select>
+                        onChange={setFilterCategory}
+                        className="min-w-[150px]"
+                      />
 
                       {/* Priority select filter */}
-                      <select
+                      <CustomDropdown
+                        options={[
+                          { value: 'all', label: 'All Priorities' },
+                          { value: 'high', label: 'High' },
+                          { value: 'medium', label: 'Medium' },
+                          { value: 'low', label: 'Low' },
+                        ]}
                         value={filterPriority}
-                        onChange={(e) => setFilterPriority(e.target.value)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer text-[11px] font-semibold"
-                      >
-                        <option value="all">All Priorities</option>
-                        <option value="high">High</option>
-                        <option value="medium">Medium</option>
-                        <option value="low">Low</option>
-                      </select>
+                        onChange={setFilterPriority}
+                        className="min-w-[140px]"
+                      />
 
                       {/* Difficulty select filter */}
-                      <select
+                      <CustomDropdown
+                        options={[
+                          { value: 'all', label: 'All Difficulties' },
+                          { value: 'beginner', label: 'Beginner' },
+                          { value: 'intermediate', label: 'Intermediate' },
+                          { value: 'advanced', label: 'Advanced' },
+                        ]}
                         value={filterDifficulty}
-                        onChange={(e) => setFilterDifficulty(e.target.value)}
-                        className="px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/10 outline-none cursor-pointer text-[11px] font-semibold"
-                      >
-                        <option value="all">All Difficulties</option>
-                        <option value="beginner">Beginner</option>
-                        <option value="intermediate">Intermediate</option>
-                        <option value="advanced">Advanced</option>
-                      </select>
+                        onChange={setFilterDifficulty}
+                        className="min-w-[150px]"
+                      />
                     </div>
 
                   </div>
@@ -1463,7 +1708,24 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
               {/* Task Cards List */}
               <div className="space-y-3">
                 {loading ? (
-                  <div className="text-center py-12 text-sm text-slate-400">Syncing sprint boards...</div>
+                  // Skeleton loading states
+                  <div className="space-y-3">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="p-4 rounded-2xl border border-slate-200/70 dark:border-white/5 bg-white/60 dark:bg-black/10 animate-pulse">
+                        <div className="flex items-center gap-3">
+                          <div className="h-5 w-5 rounded-full bg-slate-200 dark:bg-slate-700 flex-shrink-0" />
+                          <div className="flex-1 space-y-2">
+                            <div className="h-3.5 w-3/4 rounded-lg bg-slate-200 dark:bg-slate-700" />
+                            <div className="flex gap-2">
+                              <div className="h-4 w-16 rounded-md bg-slate-200 dark:bg-slate-700" />
+                              <div className="h-4 w-14 rounded-md bg-slate-200 dark:bg-slate-700" />
+                            </div>
+                          </div>
+                          <div className="h-7 w-7 rounded-lg bg-slate-200 dark:bg-slate-700 flex-shrink-0" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : filteredTasks.length > 0 ? (
                   filteredTasks.map((task) => (
                     <GlassCard 
@@ -1551,9 +1813,23 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                       </div>
                     </GlassCard>
                   ))
+                ) : totalTasks === 0 ? (
+                  <div className="text-center py-12 border border-dashed border-slate-200 dark:border-white/10 rounded-2xl p-6 bg-white/10 dark:bg-slate-900/10">
+                    <CheckCircle2 className="h-10 w-10 mx-auto text-slate-350 dark:text-slate-600 mb-3" />
+                    <h4 className="font-display font-extrabold text-slate-800 dark:text-slate-205 text-sm">No Tasks Yet</h4>
+                    <p className="text-xs text-slate-450 mt-1 max-w-xs mx-auto font-medium">Your workspace is clean. Get started by launching a new task on the left panel!</p>
+                    <button onClick={() => taskInputRef.current?.focus()} className="mt-4 px-4 py-2 bg-violet-600 hover:bg-violet-750 text-white rounded-xl text-xs font-bold transition-all cursor-pointer">
+                      Create Your First Task
+                    </button>
+                  </div>
                 ) : (
-                  <div className="text-center py-12 border border-dashed border-slate-200 dark:border-white/10 rounded-2xl">
-                    <p className="text-xs text-slate-400 font-bold">No tasks found matching board filters.</p>
+                  <div className="text-center py-12 border border-dashed border-slate-205 dark:border-white/10 rounded-2xl p-6">
+                    <Sliders className="h-10 w-10 mx-auto text-slate-350 dark:text-slate-605 mb-3" />
+                    <h4 className="font-display font-extrabold text-slate-800 dark:text-slate-200 text-sm">No Matching Tasks</h4>
+                    <p className="text-xs text-slate-450 mt-1 font-medium">Try resetting or modifying your priority, category, or status filter presets.</p>
+                    <button onClick={() => { setFilterStatus('all'); setFilterCategory('all'); setFilterPriority('all'); setFilterDifficulty('all'); setSearchQuery(''); }} className="mt-3 px-3 py-1.5 border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl text-[11px] font-bold transition cursor-pointer">
+                      Reset Filters
+                    </button>
                   </div>
                 )}
               </div>
@@ -1598,10 +1874,13 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
 
             {/* Modal Body Card */}
             <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-2xl relative z-10 text-xs font-semibold text-slate-700 dark:text-slate-200"
+              initial={{ scale: 0.95, opacity: 0, y: 8 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.95, opacity: 0, y: 8 }}
+              transition={{ duration: 0.2, ease: 'easeOut' }}
+              className={`w-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-2xl relative z-10 text-xs font-semibold text-slate-700 dark:text-slate-200 ${
+                activeModal === 'settings' ? 'max-w-lg' : 'max-w-md'
+              }`}
             >
               
               {/* Close Button */}
@@ -1612,168 +1891,307 @@ export default function DashboardPage({ user: initialUser, onLogout, onNavigate 
                 <X className="h-4 w-4" />
               </button>
 
-              {/* PROFILE EDIT MODAL */}
-              {activeModal === 'profile' && (
-                <div className="space-y-4">
-                  <h3 className="font-display font-extrabold text-lg text-slate-900 dark:text-white">Update Profile Details</h3>
-                  
-                  {error && (
-                    <div className="p-3 rounded-xl border border-red-500/20 bg-red-500/10 text-red-650 dark:text-red-450 font-bold">
-                      {error}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleUpdateProfile} className="space-y-4">
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-500 uppercase tracking-wider">Name</label>
-                      <input
-                        type="text"
-                        required
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-505"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-500 uppercase tracking-wider">Email Address</label>
-                      <input
-                        type="email"
-                        required
-                        value={editEmail}
-                        onChange={(e) => setEditEmail(e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-505"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-3 rounded-xl bg-violet-605 text-white font-bold bg-violet-600 hover:bg-violet-750 transition cursor-pointer"
-                    >
-                      Save Changes
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {/* CHANGE PASSWORD MODAL */}
-              {activeModal === 'password' && (
-                <div className="space-y-4">
-                  <h3 className="font-display font-extrabold text-lg text-slate-900 dark:text-white">Update Password Credentials</h3>
-                  
-                  {error && (
-                    <div className="p-3 rounded-xl border border-red-500/20 bg-red-500/10 text-red-650 dark:text-red-450 font-bold">
-                      {error}
-                    </div>
-                  )}
-
-                  <form onSubmit={handleUpdatePassword} className="space-y-4">
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-500 uppercase tracking-wider">Current Password</label>
-                      <input
-                        type="password"
-                        required
-                        value={currentPassword}
-                        onChange={(e) => setCurrentPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-505"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-500 uppercase tracking-wider">New Password</label>
-                      <input
-                        type="password"
-                        required
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-505"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="font-bold text-slate-500 uppercase tracking-wider">Confirm New Password</label>
-                      <input
-                        type="password"
-                        required
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-505"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full py-3 rounded-xl bg-violet-650 text-white font-bold bg-violet-600 hover:bg-violet-750 transition cursor-pointer"
-                    >
-                      Save Password
-                    </button>
-                  </form>
-                </div>
-              )}
-
-              {/* ACCOUNT SETTINGS MODAL */}
+              {/* UNIFIED SETTINGS MODAL */}
               {activeModal === 'settings' && (
                 <div className="space-y-4">
-                  <h3 className="font-display font-extrabold text-lg text-slate-900 dark:text-white">Workspace Configuration</h3>
-                  
-                  <div className="space-y-3.5 pt-2">
-                    <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-white/5">
-                      <div>
-                        <p className="font-bold">Dark Theme Swapper</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Toggle global appearance settings.</p>
-                      </div>
-                      <div className="flex gap-1">
-                        <button
-                          onClick={() => handleSaveThemeSettings('light')}
-                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer ${
-                            !window.document.documentElement.classList.contains('dark')
-                              ? 'bg-violet-500/10 text-violet-600 border-violet-550'
-                              : 'border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
-                          }`}
-                        >
-                          Light
-                        </button>
-                        <button
-                          onClick={() => handleSaveThemeSettings('dark')}
-                          className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer ${
-                            window.document.documentElement.classList.contains('dark')
-                              ? 'bg-violet-500/10 text-violet-400 border-violet-550'
-                              : 'border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
-                          }`}
-                        >
-                          Dark
-                        </button>
-                      </div>
-                    </div>
+                  <h3 className="font-display font-extrabold text-lg text-slate-900 dark:text-white flex items-center gap-2">
+                    <Settings className="h-5 w-5 text-violet-500" />
+                    Workspace Settings
+                  </h3>
 
-                    <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-white/5">
-                      <div>
-                        <p className="font-bold">SaaS Onboarding Tour</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Reset workspace walk guides.</p>
-                      </div>
+                  {/* Tab Navigation */}
+                  <div className="flex gap-1 border-b border-slate-100 dark:border-white/5 pb-2 mb-4 overflow-x-auto select-none">
+                    {[
+                      { id: 'profile', label: 'Profile' },
+                      { id: 'preferences', label: 'Preferences' },
+                      { id: 'security', label: 'Security' },
+                      { id: 'danger', label: 'Danger Zone' },
+                    ].map((t) => (
                       <button
-                        onClick={() => {
-                          localStorage.removeItem(`tour_completed_${user._id}`);
-                          setActiveModal(null);
-                          setTourStep(1);
-                        }}
-                        className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 text-xs font-bold cursor-pointer"
+                        key={t.id}
+                        type="button"
+                        onClick={() => { setSettingsTab(t.id as any); setError(''); setShowDeleteConfirm(false); }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                          settingsTab === t.id
+                            ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400 font-extrabold'
+                            : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-white/5'
+                        }`}
                       >
-                        Reset Guide
+                        {t.label}
                       </button>
-                    </div>
-
-                    <div className="pt-2 text-center text-[10px] text-slate-400 font-medium">
-                      SmartFlow Framework Version 2.1.0-SaaS
-                    </div>
+                    ))}
                   </div>
+
+                  {error && (
+                    <div className="p-3 rounded-xl border border-red-500/20 bg-red-500/10 text-red-650 dark:text-red-450 font-bold">
+                      {error}
+                    </div>
+                  )}
+
+                  {/* PROFILE TAB */}
+                  {settingsTab === 'profile' && (
+                    <form onSubmit={handleUpdateProfile} className="space-y-4">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Name</label>
+                        <input
+                          type="text"
+                          required
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-550 dark:bg-black/20 outline-none text-slate-905 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Email Address</label>
+                        <input
+                          type="email"
+                          required
+                          value={editEmail}
+                          onChange={(e) => setEditEmail(e.target.value)}
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-550 dark:bg-black/20 outline-none text-slate-905 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Profile Image URL</label>
+                        <input
+                          type="text"
+                          value={profileImagePref}
+                          onChange={(e) => setProfileImagePref(e.target.value)}
+                          placeholder="https://example.com/avatar.png"
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                        {profileImagePref && (
+                          <div className="flex items-center gap-3 mt-2 p-2.5 rounded-xl border border-slate-200/70 dark:border-white/5 bg-slate-50 dark:bg-black/10">
+                            <img
+                              src={profileImagePref}
+                              alt="Profile preview"
+                              className="h-10 w-10 rounded-full object-cover border border-slate-200 dark:border-white/10"
+                              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                            />
+                            <span className="text-[10px] text-slate-500 font-medium">Image preview</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Avatar Color Theme</label>
+                        <div className="grid grid-cols-4 gap-2 pt-1.5">
+                          {[
+                            { value: 'from-violet-600 to-indigo-600', label: 'Indigo' },
+                            { value: 'from-pink-500 to-rose-500', label: 'Rose' },
+                            { value: 'from-emerald-500 to-teal-500', label: 'Teal' },
+                            { value: 'from-amber-500 to-orange-500', label: 'Orange' },
+                            { value: 'from-cyan-500 to-blue-500', label: 'Blue' },
+                            { value: 'from-purple-600 to-pink-500', label: 'Purple-Pink' },
+                            { value: 'from-fuchsia-600 to-violet-600', label: 'Fuchsia' },
+                            { value: 'from-emerald-400 to-cyan-500', label: 'Cyan-Teal' },
+                          ].map((color) => (
+                            <button
+                              key={color.value}
+                              type="button"
+                              onClick={() => setAvatarColorPref(color.value)}
+                              className={`h-8 rounded-lg bg-gradient-to-tr ${color.value} border-2 transition-all relative ${
+                                avatarColorPref === color.value 
+                                  ? 'border-violet-600 dark:border-white scale-105 shadow-md' 
+                                  : 'border-transparent hover:scale-102 hover:border-slate-300'
+                              }`}
+                              title={color.label}
+                            >
+                              {avatarColorPref === color.value && (
+                                <span className="absolute inset-0 flex items-center justify-center text-white">
+                                  <Check className="h-4 w-4 drop-shadow" />
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-750 text-white font-bold transition cursor-pointer"
+                      >
+                        Save Profile Details
+                      </button>
+                    </form>
+                  )}
+
+                  {/* PREFERENCES TAB */}
+                  {settingsTab === 'preferences' && (
+                    <form onSubmit={handleSavePreferences} className="space-y-4">
+                      <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-white/5">
+                        <div>
+                          <p className="font-bold">Dark Theme Swapper</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Toggle global appearance settings.</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleSaveThemeSettings('light')}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer ${
+                              !window.document.documentElement.classList.contains('dark')
+                                ? 'bg-violet-500/10 text-violet-600 border-violet-500 font-extrabold'
+                                : 'border-slate-205 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
+                            }`}
+                          >
+                            Light
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveThemeSettings('dark')}
+                            className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition cursor-pointer ${
+                              window.document.documentElement.classList.contains('dark')
+                                ? 'bg-violet-500/10 text-violet-400 border-violet-500 font-extrabold'
+                                : 'border-slate-205 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5'
+                            }`}
+                          >
+                            Dark
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between items-center py-2 border-b border-slate-100 dark:border-white/5">
+                        <div>
+                          <p className="font-bold">Email Notifications</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-medium">Receive digests on completed workflows.</p>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={emailNotifications}
+                          onChange={(e) => setEmailNotifications(e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-200 text-violet-650 focus:ring-violet-500 cursor-pointer"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5 py-2 border-b border-slate-100 dark:border-white/5">
+                        <p className="font-bold">Default Task Sorting</p>
+                        <p className="text-[10px] text-slate-400 mb-2 font-medium">Preset sorting mechanism for Board columns.</p>
+                        <CustomDropdown
+                          options={[
+                            { value: 'newest', label: 'Sort: Newest' },
+                            { value: 'dueDate', label: 'Sort: Due Date' },
+                            { value: 'priority', label: 'Sort: Priority' },
+                            { value: 'difficulty', label: 'Sort: Difficulty' },
+                          ]}
+                          value={taskSortingPref}
+                          onChange={setTaskSortingPref}
+                          className="w-full"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-755 text-white font-bold transition cursor-pointer"
+                      >
+                        Save Preferences
+                      </button>
+                    </form>
+                  )}
+
+                  {/* SECURITY TAB */}
+                  {settingsTab === 'security' && (
+                    <form onSubmit={handleUpdatePassword} className="space-y-4">
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Current Password</label>
+                        <input
+                          type="password"
+                          required
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">New Password</label>
+                        <input
+                          type="password"
+                          required
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-slate-500 uppercase tracking-wider">Confirm New Password</label>
+                        <input
+                          type="password"
+                          required
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-white/15 bg-slate-50 dark:bg-black/20 outline-none text-slate-900 dark:text-white focus:border-violet-500 font-semibold"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 rounded-xl bg-violet-600 hover:bg-violet-750 text-white font-bold transition cursor-pointer"
+                      >
+                        Save Password
+                      </button>
+                    </form>
+                  )}
+
+                  {/* DANGER ZONE TAB */}
+                  {settingsTab === 'danger' && (
+                    <div className="space-y-4">
+                      <div className="p-4 rounded-xl border border-rose-500/20 bg-rose-500/5 text-rose-600 dark:text-rose-400 space-y-2">
+                        <p className="font-extrabold uppercase text-[10px] tracking-wider">Danger Zone</p>
+                        <p className="text-[11px] font-semibold leading-relaxed">
+                          Permanently delete your workspace account, settings, and all active/completed tasks from the database. This action cannot be undone.
+                        </p>
+                      </div>
+
+                      {!showDeleteConfirm ? (
+                        <button
+                          type="button"
+                          onClick={() => setShowDeleteConfirm(true)}
+                          className="w-full py-3 rounded-xl bg-red-650 hover:bg-red-700 text-white font-bold transition cursor-pointer"
+                        >
+                          Delete Account
+                        </button>
+                      ) : (
+                        <div className="space-y-3 pt-2">
+                          <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-350">
+                            Type <span className="font-extrabold text-red-600 select-all">DELETE</span> below to confirm:
+                          </label>
+                          <input
+                            type="text"
+                            value={confirmDeleteText}
+                            onChange={(e) => setConfirmDeleteText(e.target.value)}
+                            placeholder="DELETE"
+                            className="w-full px-3 py-2 text-center text-sm font-black border border-red-500/30 rounded-xl bg-red-500/5 outline-none focus:border-red-500 text-red-600"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { setShowDeleteConfirm(false); setConfirmDeleteText(''); }}
+                              className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-white/5 font-bold cursor-pointer text-center"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={confirmDeleteText !== 'DELETE'}
+                              onClick={handleDeleteAccount}
+                              className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-750 text-white font-bold disabled:opacity-40 transition cursor-pointer"
+                            >
+                              Confirm Delete
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* KEYBOARD SHORTCUTS GUIDE */}
               {activeModal === 'shortcuts' && (
                 <div className="space-y-4">
                   <h3 className="font-display font-extrabold text-lg text-slate-900 dark:text-white flex items-center gap-2">

@@ -148,4 +148,13 @@ export const MockDB = {
     saveDb(db);
     return db.tasks.length !== initialLength;
   },
+
+  deleteUser: (id: string) => {
+    const db = loadDb();
+    const initialUsersLength = db.users.length;
+    db.users = db.users.filter((user) => user._id !== id);
+    db.tasks = db.tasks.filter((task) => task.userId !== id);
+    saveDb(db);
+    return db.users.length !== initialUsersLength;
+  },
 };

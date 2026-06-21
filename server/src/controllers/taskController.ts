@@ -9,6 +9,21 @@ import { MockDB } from '../utils/mockDb';
 export const createTask = async (req: AuthRequest, res: Response): Promise<any> => {
   const { title, category, status, userId, priority, difficulty, dueDate } = req.body;
 
+  // Determine correct category based on title keywords
+  const lowerTitle = title?.toString().toLowerCase() || '';
+  const codingKeywords = ['api', 'node.js', 'nodejs', 'leetcode', 'html', 'css', 'function', 'code'];
+  const fitnessKeywords = ['workout', 'gym', 'yoga', 'running', 'calories', 'steps', 'body training'];
+  let finalCategory = category;
+  if (codingKeywords.some(kw => lowerTitle.includes(kw))) {
+    finalCategory = 'coding';
+  } else if (fitnessKeywords.some(kw => lowerTitle.includes(kw))) {
+    finalCategory = 'fitness';
+  }
+  // If category is fitness but title matches coding keywords, override to coding
+  if (category === 'fitness' && codingKeywords.some(kw => lowerTitle.includes(kw))) {
+    finalCategory = 'coding';
+  }
+
   // Resolve userId: either from body (for simple REST requests) or auth token
   const resolvedUserId = userId || (req.user ? req.user.id : null);
 

@@ -8,15 +8,34 @@ export default function App() {
   const [user, setUser] = useState<any | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
-  // Load auth state from local storage on boot
+  // Load auth state and theme from local storage on boot
   useEffect(() => {
+    // Apply saved theme immediately to prevent flicker
+    const darkMode = localStorage.getItem('darkMode');
+    if (darkMode === 'true') {
+      document.documentElement.classList.add('dark');
+    } else if (darkMode === 'false') {
+      document.documentElement.classList.remove('dark');
+    } else {
+      // Default: check system preference
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.classList.add('dark');
+      }
+    }
+
     const savedUser = localStorage.getItem('user');
     const savedToken = localStorage.getItem('token');
     
     if (savedUser && savedToken) {
-      setUser(JSON.parse(savedUser));
-      setToken(savedToken);
-      setPage('dashboard');
+      try {
+        setUser(JSON.parse(savedUser));
+        setToken(savedToken);
+        setPage('dashboard');
+      } catch {
+        // Corrupt localStorage data — clear it
+        localStorage.removeItem('user');
+        localStorage.removeItem('token');
+      }
     }
   }, []);
 

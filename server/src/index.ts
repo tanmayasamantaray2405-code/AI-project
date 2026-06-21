@@ -24,6 +24,9 @@ app.use(express.json());
 app.use('/users', userRoutes);
 app.use('/tasks', taskRoutes);
 app.use('/recommendations', recommendationRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/recommendations', recommendationRoutes);
 
 // Health Check / Root route
 app.get('/', (req: Request, res: Response) => {

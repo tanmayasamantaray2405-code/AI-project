@@ -1,11 +1,12 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
+import { AuthRequest } from '../types';
 import { getSmartRecommendations, getSmartInsights } from '../services/recommendationService';
 
 // @desc    Get smart task recommendations for a user
-// @route   GET /recommendations/:userId
+// @route   GET /recommendations/me or /recommendations/:userId
 // @access  Private
-export const getRecommendations = async (req: Request, res: Response): Promise<any> => {
-  const { userId } = req.params;
+export const getRecommendations = async (req: AuthRequest, res: Response): Promise<any> => {
+  const userId = req.user?.id || req.params.userId;
 
   if (!userId) {
     return res.status(400).json({ success: false, message: 'User ID is required' });
@@ -23,10 +24,10 @@ export const getRecommendations = async (req: Request, res: Response): Promise<a
 };
 
 // @desc    Get smart productivity insights and scores
-// @route   GET /recommendations/:userId/insights
+// @route   GET /recommendations/me/insights or /recommendations/:userId/insights
 // @access  Private
-export const getInsights = async (req: Request, res: Response): Promise<any> => {
-  const { userId } = req.params;
+export const getInsights = async (req: AuthRequest, res: Response): Promise<any> => {
+  const userId = req.user?.id || req.params.userId;
 
   if (!userId) {
     return res.status(400).json({ success: false, message: 'User ID is required' });

@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.protect = void 0;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const security_1 = require("../utils/security");
 const protect = async (req, res, next) => {
     let token;
     // Check for Bearer token in headers
@@ -15,7 +16,7 @@ const protect = async (req, res, next) => {
         return res.status(401).json({ success: false, message: 'Not authorized, no token provided' });
     }
     try {
-        const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET || 'prod_ready_secret_key_987654321');
+        const decoded = jsonwebtoken_1.default.verify(token, (0, security_1.getJwtSecret)());
         // Attach the user ID to the request object
         req.user = { id: decoded.id };
         next();

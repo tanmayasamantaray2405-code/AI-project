@@ -3,10 +3,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getInsights = exports.getRecommendations = void 0;
 const recommendationService_1 = require("../services/recommendationService");
 // @desc    Get smart task recommendations for a user
-// @route   GET /recommendations/:userId
+// @route   GET /recommendations/me or /recommendations/:userId
 // @access  Private
 const getRecommendations = async (req, res) => {
-    const { userId } = req.params;
+    const userId = req.user?.id || req.params.userId;
     if (!userId) {
         return res.status(400).json({ success: false, message: 'User ID is required' });
     }
@@ -23,10 +23,10 @@ const getRecommendations = async (req, res) => {
 };
 exports.getRecommendations = getRecommendations;
 // @desc    Get smart productivity insights and scores
-// @route   GET /recommendations/:userId/insights
+// @route   GET /recommendations/me/insights or /recommendations/:userId/insights
 // @access  Private
 const getInsights = async (req, res) => {
-    const { userId } = req.params;
+    const userId = req.user?.id || req.params.userId;
     if (!userId) {
         return res.status(400).json({ success: false, message: 'User ID is required' });
     }

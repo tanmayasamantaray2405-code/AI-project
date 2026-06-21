@@ -2,11 +2,13 @@ import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import User from '../models/User';
+import Task from '../models/Task';
 import { MockDB } from '../utils/mockDb';
 import { AuthRequest } from '../types';
+import { getJwtSecret, isDevelopmentRuntime } from '../utils/security';
 
 const generateToken = (id: string): string => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'prod_ready_secret_key_987654321', {
+  return jwt.sign({ id }, getJwtSecret(), {
     expiresIn: '30d',
   });
 };
@@ -247,13 +249,20 @@ export const forgotPassword = async (req: Request, res: Response): Promise<any> 
         otpVerified: false,
       });
 
-      console.log(`[DEV OTP RECOVERY] OTP for ${email}: ${otp}`);
+      if (isDevelopmentRuntime()) {
+        console.log(`[DEV OTP RECOVERY] OTP for ${email}: ${otp}`);
+      }
 
-      return res.json({
+      const payload: any = {
         success: true,
-        message: 'OTP sent to email. Check server console or use payload OTP.',
-        devOtp: otp, // Returned for dev testing convenience
-      });
+        message: 'If an account exists for this email, a recovery code has been sent.',
+      };
+
+      if (isDevelopmentRuntime()) {
+        payload.devOtp = otp;
+      }
+
+      return res.json(payload);
     } catch (error) {
       return res.status(500).json({ success: false, message: (error as Error).message });
     }
@@ -270,13 +279,20 @@ export const forgotPassword = async (req: Request, res: Response): Promise<any> 
     user.otpVerified = false;
     await user.save();
 
-    console.log(`[DEV OTP RECOVERY] OTP for ${email}: ${otp}`);
+    if (isDevelopmentRuntime()) {
+      console.log(`[DEV OTP RECOVERY] OTP for ${email}: ${otp}`);
+    }
 
-    return res.json({
+    const payload: any = {
       success: true,
-      message: 'OTP verification code sent. Check server console or use payload OTP.',
-      devOtp: otp,
-    });
+      message: 'If an account exists for this email, a recovery code has been sent.',
+    };
+
+    if (isDevelopmentRuntime()) {
+      payload.devOtp = otp;
+    }
+
+    return res.json(payload);
   } catch (error) {
     return res.status(500).json({ success: false, message: (error as Error).message });
   }
@@ -314,7 +330,7 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
       // Generate verification token (short-lived 15 mins reset token)
       const resetToken = jwt.sign(
         { id: user._id, isResetToken: true },
-        process.env.JWT_SECRET || 'prod_ready_secret_key_987654321',
+        getJwtSecret(),
         { expiresIn: '15m' }
       );
 
@@ -347,7 +363,7 @@ export const verifyOtp = async (req: Request, res: Response): Promise<any> => {
 
     const resetToken = jwt.sign(
       { id: user._id, isResetToken: true },
-      process.env.JWT_SECRET || 'prod_ready_secret_key_987654321',
+      getJwtSecret(),
       { expiresIn: '15m' }
     );
 
@@ -377,7 +393,7 @@ export const resetPassword = async (req: Request, res: Response): Promise<any> =
 
   try {
     // Decode reset token
-    const decoded = jwt.verify(resetToken, process.env.JWT_SECRET || 'prod_ready_secret_key_987654321') as any;
+    const decoded = jwt.verify(resetToken, getJwtSecret()) as any;
     
     if (!decoded.id || !decoded.isResetToken) {
       return res.status(400).json({ success: false, message: 'Invalid reset token' });
@@ -429,12 +445,12 @@ export const resetPassword = async (req: Request, res: Response): Promise<any> =
   }
 };
 
-// @desc    Update user profile details (Name, Email, Password)
+// @desc    Update user profile details (Name, Email, Password, Profile Image)
 // @route   PUT /users/profile
 // @access  Private (Authenticated)
 export const updateProfile = async (req: AuthRequest, res: Response): Promise<any> => {
   const userId = req.user?.id;
-  const { name, email, currentPassword, newPassword } = req.body;
+  const { name, email, currentPassword, newPassword, profileImage } = req.body;
 
   if (!userId) {
     return res.status(401).json({ success: false, message: 'Unauthorized profile update' });
@@ -458,6 +474,8 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<an
       const updates: any = {};
       if (name) updates.name = name;
       if (email) updates.email = email;
+      if (profileImage !== undefined) updates.profileImage = profileImage;
+      if (req.body.avatarColor !== undefined) updates.avatarColor = req.body.avatarColor;
 
       // Handle password update if requested
       if (newPassword) {
@@ -506,6 +524,8 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<an
     }
 
     if (name) user.name = name;
+    if (profileImage !== undefined) user.profileImage = profileImage;
+    if (req.body.avatarColor !== undefined) user.avatarColor = req.body.avatarColor;
 
     if (newPassword) {
       if (!currentPassword) {
@@ -530,6 +550,7 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<an
         name: saved.name,
         email: saved.email,
         avatarColor: saved.avatarColor,
+        profileImage: saved.profileImage,
         settings: saved.settings,
         createdAt: saved.createdAt,
         token: generateToken(saved._id.toString()),
@@ -545,7 +566,7 @@ export const updateProfile = async (req: AuthRequest, res: Response): Promise<an
 // @access  Private (Authenticated)
 export const updateSettings = async (req: AuthRequest, res: Response): Promise<any> => {
   const userId = req.user?.id;
-  const { theme } = req.body;
+  const { theme, emailNotifications, taskSorting } = req.body;
 
   if (!userId) {
     return res.status(401).json({ success: false, message: 'Unauthorized settings update' });
@@ -558,7 +579,12 @@ export const updateSettings = async (req: AuthRequest, res: Response): Promise<a
         return res.status(404).json({ success: false, message: 'User not found' });
       }
 
-      const settings = { ...user.settings, theme: theme || 'light' };
+      const settings = {
+        ...user.settings,
+        theme: theme || user.settings?.theme || 'light',
+        emailNotifications: emailNotifications !== undefined ? emailNotifications : (user.settings?.emailNotifications ?? true),
+        taskSorting: taskSorting || user.settings?.taskSorting || 'newest',
+      };
       const updated = MockDB.updateUser(userId, { settings });
       const { password, ...safeUser } = updated;
 
@@ -580,6 +606,8 @@ export const updateSettings = async (req: AuthRequest, res: Response): Promise<a
 
     user.settings = {
       theme: theme || user.settings?.theme || 'light',
+      emailNotifications: emailNotifications !== undefined ? emailNotifications : (user.settings?.emailNotifications ?? true),
+      taskSorting: taskSorting || user.settings?.taskSorting || 'newest',
     };
 
     const saved = await user.save();
@@ -591,10 +619,50 @@ export const updateSettings = async (req: AuthRequest, res: Response): Promise<a
         name: saved.name,
         email: saved.email,
         avatarColor: saved.avatarColor,
+        profileImage: saved.profileImage,
         settings: saved.settings,
         createdAt: saved.createdAt,
       },
     });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: (error as Error).message });
+  }
+};
+
+// @desc    Delete user account and all tasks
+// @route   DELETE /users/profile
+// @access  Private (Authenticated)
+export const deleteUser = async (req: AuthRequest, res: Response): Promise<any> => {
+  const userId = req.user?.id;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+
+  if (process.env.USE_MOCK_DB === 'true') {
+    try {
+      const deleted = MockDB.deleteUser(userId);
+      if (!deleted) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+      return res.json({ success: true, message: 'Account deleted successfully' });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: (error as Error).message });
+    }
+  }
+
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    // Delete associated tasks
+    await Task.deleteMany({ userId });
+    // Delete user
+    await user.deleteOne();
+
+    return res.json({ success: true, message: 'Account deleted successfully' });
   } catch (error) {
     return res.status(500).json({ success: false, message: (error as Error).message });
   }

@@ -281,23 +281,9 @@ export default function LoginPage({ onNavigate, onLoginSuccess }: LoginPageProps
                 </div>
 
                 <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                      Password
-                    </label>
-                    {mode === 'login' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setError('');
-                          setMode('forgot-email');
-                        }}
-                        className="text-[10px] font-bold text-violet-600 dark:text-violet-400 hover:underline cursor-pointer"
-                      >
-                        Forgot Password?
-                      </button>
-                    )}
-                  </div>
+                  <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                    Password
+                  </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                       <Lock className="h-4 w-4" />
@@ -311,6 +297,20 @@ export default function LoginPage({ onNavigate, onLoginSuccess }: LoginPageProps
                       className="w-full pl-9 pr-4 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-white/10 bg-white/40 dark:bg-black/20 text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 outline-none focus:border-violet-500 dark:focus:border-violet-400 transition-colors"
                     />
                   </div>
+                  {mode === 'login' && (
+                    <div className="text-right">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setError('');
+                          setMode('forgot-email');
+                        }}
+                        className="text-[11px] font-bold text-violet-650 dark:text-violet-400 hover:underline cursor-pointer mt-1"
+                      >
+                        Forgot Password?
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <button
